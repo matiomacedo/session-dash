@@ -24,11 +24,11 @@ The hooks use plain Python with no extra packages. Each one runs in about 20ms, 
 Requires macOS, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/) (`brew install uv`).
 
 ```
-/plugin marketplace add ~/path/to/claude-dashboard
+/plugin marketplace add matiomacedo/session-dash
 /plugin install session-dash@session-dash
 ```
 
-Restart any sessions that were already open so they pick up the hooks. To try it without installing, start a session with `claude --plugin-dir ~/path/to/claude-dashboard`.
+Restart any sessions that were already open so they pick up the hooks. To try it without installing, clone the repo and start a session with `claude --plugin-dir path/to/session-dash`.
 
 ## Usage
 
