@@ -1,0 +1,16 @@
+{
+  "name": "session-dash",
+  "owner": {
+    "name": "Matio Macedo"
+  },
+  "metadata": {
+    "description": "Local marketplace for the session-dash plugin."
+  },
+  "plugins": [
+    {
+      "name": "session-dash",
+      "source": "./",
+      "description": "Live dashboard of all your open Claude Code sessions: working, idle, or waiting on you."
+    }
+  ]
+}
