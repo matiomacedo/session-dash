@@ -104,8 +104,10 @@ def test_subagent_tool_use_keeps_needs_you(state_dir):
     send("PreToolUse", 103, tool_name="Grep", tool_use_id="s1", agent_id="sub-1")
     send("PostToolUse", 104, tool_name="Grep", tool_use_id="s1", agent_id="sub-1")
     assert state(state_dir)["state"] == "needs_you"
+    assert state(state_dir)["last_tool"] == "Bash"  # still the call waiting on you
     send("PreToolUse", 110, tool_name="Read", tool_use_id="b")  # main agent moving on clears it
     assert state(state_dir)["state"] == "working"
+    assert state(state_dir)["last_tool"] == "Read"
 
 
 def test_stop_forgets_unfinished_calls(state_dir):

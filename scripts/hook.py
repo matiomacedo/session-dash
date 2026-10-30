@@ -208,10 +208,10 @@ def apply_event(payload, now=None):
             in_flight = {}
         elif event == "PreToolUse":
             in_flight[call_id] = tool
-            data["last_tool"] = tool
             # a subagent's tool call (same session id) doesn't answer the main agent's prompt
             if state != "needs_you" or not payload.get("agent_id"):
                 new_state = clear()
+                data["last_tool"] = tool
         elif event in TOOL_DONE:
             in_flight.pop(call_id, None)
             if state != "needs_you":
