@@ -46,6 +46,12 @@ States:
 
 The time next to each state is how long the session has been in it.
 
+## Menu bar
+
+With [SwiftBar](https://swiftbar.app) (`brew install swiftbar`, then open it once and pick a plugin folder), run **`/dash-bar`** in any session. The menu bar shows one session at a time, e.g. `● web-client · working 3m`, switching every 3 seconds. Sessions that need you are red, and while another session is shown the title starts with `(1!)` so a blocked one is never hidden. Click it to see every session with its last reply, or to open the full dashboard.
+
+Run `/dash-bar` again after updating the plugin, since the plugin's install path changes.
+
 ## Options
 
 | Setting | Default | Effect |

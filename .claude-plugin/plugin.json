@@ -1,6 +1,6 @@
 {
   "name": "session-dash",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Live dashboard of all your open Claude Code sessions: working, idle, or waiting on you.",
   "author": { "name": "Matio Macedo" },
   "license": "MIT"
