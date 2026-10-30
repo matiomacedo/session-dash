@@ -31,7 +31,9 @@ def params(state, **extra):
 def status(s, now):
     state = s.get("state")
     label = STATES.get(state, (state or "?",))[0]
-    return f"{label} {elapsed(now - s.get('state_since', now))}"
+    # mcp__server__tool -> tool, so long MCP names don't crowd out the rest of the title
+    tool = f" · {clean(s['last_tool'].rpartition('__')[2])}" if s.get("last_tool") else ""
+    return f"{label} {elapsed(now - s.get('state_since', now))}{tool}"
 
 
 def render_menu(sessions, now, hidden=0, stale_minutes="30"):
@@ -44,7 +46,7 @@ def render_menu(sessions, now, hidden=0, stale_minutes="30"):
         # keep a blocked session visible while the title shows another one
         prefix = f"({waiting}!) " if waiting and shown.get("state") != "needs_you" else ""
         lines = [f"{prefix}● {clean(shown.get('project') or '?')} · {status(shown, now)}"
-                 + params(shown.get("state"), length=40), "---"]
+                 + params(shown.get("state"), length=50), "---"]
         for s in sessions:
             blocked = s.get("state") == "needs_you"
             reply = (s.get("notification") or "Claude is waiting for you") if blocked else s.get("summary")
