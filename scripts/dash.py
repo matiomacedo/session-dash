@@ -60,12 +60,33 @@ def load_sessions(state_dir, now, alive=is_alive):
             sessions.append(session)
         except (OSError, ValueError):
             continue  # being replaced or removed right now
-    return sorted(sessions, key=lambda s: (STATES.get(s.get("state"), ("", "", 3))[2], -s.get("last_event_at", 0)))
+    return sorted(sessions, key=lambda s: (rank(s), -s.get("last_event_at", 0)))
+
+
+def rank(session):
+    state = session.get("state")
+    if state == "idle" and session.get("agents"):
+        state = "working"  # a background subagent is still at it
+    return STATES.get(state, ("", "", 3))[2]
 
 
 def split_stale(sessions, now, stale_seconds):
     fresh = [s for s in sessions if now - s.get("last_event_at", 0) <= stale_seconds]
+    for s in fresh:  # a missed SubagentStop shouldn't leave a row behind forever; a long call isn't quiet
+        s["agents"] = {k: a for k, a in (s.get("agents") or {}).items()
+                       if a.get("calls") or now - a.get("last_event_at", 0) <= stale_seconds}
     return fresh, len(sessions) - len(fresh)
+
+
+def running_agents(session):
+    """The session's subagents, oldest first, each with the state it shows: needs_you if it holds the blocked call."""
+    blocked = set(session.get("blocked_on") or []) if session.get("state") == "needs_you" else set()
+    return [{**a, "state": "needs_you" if blocked & set(a.get("calls") or []) else "working"}
+            for a in sorted((session.get("agents") or {}).values(), key=lambda a: a.get("since", 0))]
+
+
+def spinner(now):
+    return SPINNER[int(now * 10) % len(SPINNER)]
 
 
 def elapsed(seconds):
@@ -98,7 +119,7 @@ def render(sessions, now, hidden=0, stale_minutes=30):
     for s in sessions:
         state = s.get("state")
         label, style, _ = STATES.get(state, (state or "?", GREY, 3))
-        glyph = SPINNER[int(now * 10) % len(SPINNER)] if state == "working" else " "
+        glyph = spinner(now) if state == "working" else " "
         blocked = state == "needs_you"
         # while blocked, the notification says what to approve; that beats the previous reply
         reply = (s.get("notification") or "Claude is waiting for you") if blocked else (s.get("summary") or "")
@@ -109,6 +130,16 @@ def render(sessions, now, hidden=0, stale_minutes=30):
             Text(s.get("last_tool") or "", style=RED if blocked else GREY),
             Text(reply, style=RED if blocked else "", no_wrap=True, overflow="ellipsis"),
         )
+        for a in running_agents(s):
+            a_blocked = a["state"] == "needs_you"
+            label, style, _ = STATES[a["state"]]
+            table.add_row(
+                Text(f" └ {a.get('type') or 'agent'}", style=RED if a_blocked else GREY),
+                Text(f"{' ' if a_blocked else spinner(now)} {label}", style=style),
+                Text(elapsed(now - a.get("since", now)), style=RED if a_blocked else GREY),
+                Text(a.get("last_tool") or "", style=RED if a_blocked else GREY),
+                Text(""),
+            )
 
     waiting = sum(s.get("state") == "needs_you" for s in sessions)
     count = plural(len(sessions), "session") + (f", {waiting} need{'s' if waiting == 1 else ''} you" if waiting else "")

@@ -18,7 +18,10 @@ from pathlib import Path
 STATE_DIR = Path(os.environ.get("CLAUDE_DASH_DIR", Path.home() / ".cache" / "claude-dash"))
 SHELLS = {"sh", "bash", "zsh", "dash"}
 TOOL_DONE = {"PostToolUse", "PostToolUseFailure"}
-EVENTS = {"SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop", "SessionEnd"} | TOOL_DONE
+EVENTS = {"SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop", "SessionEnd",
+          "SubagentStart", "SubagentStop"} | TOOL_DONE
+# Tools that run a subagent; while one runs, its own call isn't what a permission prompt is about
+AGENT_TOOLS = {"Agent", "Task"}
 # Notifications that don't mean Claude is blocked on the user
 INFO_NOTIFICATIONS = {"idle_prompt", "auth_success"}
 
@@ -190,6 +193,15 @@ def apply_event(payload, now=None):
         # in_flight: tool calls started but not finished, {tool_use_id: tool_name}
         # blocked_on: the in-flight calls that might be waiting for permission
         in_flight = data.get("in_flight") or {}
+        # agents: running subagents, {agent_id: {type, since, last_tool, last_event_at, calls}}
+        agents = data.get("agents") or {}
+        agent_id = payload.get("agent_id")
+        agent = agents.get(agent_id) if agent_id else None
+        # only a start or a new call adds one; a late event after SubagentStop mustn't bring it back
+        if agent_id and not agent and event in ("SubagentStart", "PreToolUse"):
+            agent = agents[agent_id] = {"type": payload.get("agent_type") or "agent", "since": now, "calls": []}
+        if agent:
+            agent["last_event_at"] = now
         tool = payload.get("tool_name")
         call_id = payload.get("tool_use_id") or tool
         state = data.get("state", "idle")
@@ -203,26 +215,37 @@ def apply_event(payload, now=None):
             if payload.get("source") != "compact":  # compaction fires mid-turn
                 new_state = "idle"
                 in_flight = {}
+                agents = {}
+        elif event == "SubagentStop":
+            agents.pop(agent_id, None)
         elif event == "UserPromptSubmit":
             new_state = clear()
             in_flight = {}
+            agents = {}  # interrupted ones may never send SubagentStop; live ones return on their next call
         elif event == "PreToolUse":
             in_flight[call_id] = tool
-            # a subagent's tool call (same session id) doesn't answer the main agent's prompt
-            if state != "needs_you" or not payload.get("agent_id"):
+            # a subagent's tool call (same session id) is shown on its own row, not the session's
+            if agent:
+                agent["last_tool"] = tool
+                agent.setdefault("calls", []).append(call_id)
+            else:
                 new_state = clear()
                 data["last_tool"] = tool
         elif event in TOOL_DONE:
             in_flight.pop(call_id, None)
+            if agent and call_id in agent.get("calls", []):
+                agent["calls"].remove(call_id)
             if state != "needs_you":
-                new_state = "working"
-                data["last_tool"] = tool
+                if not agent_id:
+                    new_state = "working"
+                    data["last_tool"] = tool
             elif data.get("blocked_on"):
                 # cleared only once every call that could be the blocked one has finished
                 data["blocked_on"] = [c for c in data["blocked_on"] if c in in_flight]
                 if not data["blocked_on"]:
                     new_state = clear()
-                    data["last_tool"] = tool
+                    if not agent_id:
+                        data["last_tool"] = tool
         elif event == "Notification":
             if not is_info_notification(payload):
                 new_state = "needs_you"
@@ -230,12 +253,15 @@ def apply_event(payload, now=None):
                 data["notification"] = message
                 # "Claude needs your permission to use Bash" names the tool; MCP display names may not match
                 named = message.rpartition("permission to use ")[2].strip()
-                data["blocked_on"] = [c for c, t in in_flight.items() if t == named] or list(in_flight)
+                data["blocked_on"] = ([c for c, t in in_flight.items() if t == named]
+                                      or [c for c, t in in_flight.items() if t not in AGENT_TOOLS]
+                                      or list(in_flight))
         elif event == "Stop":
             new_state = "idle"
             in_flight = {}
+            agents = {}
             data["summary"] = summary
-        data["in_flight"] = in_flight
+        data["in_flight"], data["agents"] = in_flight, agents
 
         if new_state != state or "state" not in data:
             data["state"] = new_state

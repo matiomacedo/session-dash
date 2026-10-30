@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from dash import AMBER, RED, STATE_DIR, STATES, elapsed, load_sessions, plural, split_stale  # noqa: E402
+from dash import AMBER, RED, STATE_DIR, STATES, elapsed, load_sessions, plural, running_agents, split_stale  # noqa: E402
 
 COLORS = {"needs_you": RED, "working": AMBER}
 PERIOD = 3  # seconds each session stays in the title; matches the .3s. refresh in the plugin filename
@@ -28,12 +28,15 @@ def params(state, **extra):
     return " | " + " ".join(f"{k}={v}" for k, v in extra.items()) if extra else ""
 
 
-def status(s, now):
-    state = s.get("state")
+def status(state, since, tool, now):
     label = STATES.get(state, (state or "?",))[0]
     # mcp__server__tool -> tool, so long MCP names don't crowd out the rest of the title
-    tool = f" · {clean(s['last_tool'].rpartition('__')[2])}" if s.get("last_tool") else ""
-    return f"{label} {elapsed(now - s.get('state_since', now))}{tool}"
+    tool = f" · {clean(tool.rpartition('__')[2])}" if tool else ""
+    return f"{label} {elapsed(now - since)}{tool}"
+
+
+def session_status(s, now):
+    return status(s.get("state"), s.get("state_since", now), s.get("last_tool"), now)
 
 
 def render_menu(sessions, now, hidden=0, stale_minutes="30"):
@@ -45,14 +48,20 @@ def render_menu(sessions, now, hidden=0, stale_minutes="30"):
         waiting = sum(s.get("state") == "needs_you" for s in sessions)
         # keep a blocked session visible while the title shows another one
         prefix = f"({waiting}!) " if waiting and shown.get("state") != "needs_you" else ""
-        lines = [f"{prefix}● {clean(shown.get('project') or '?')} · {status(shown, now)}"
+        agents = running_agents(shown)
+        # before the status, so the title's length limit doesn't cut it off
+        agent_count = f" · {plural(len(agents), 'agent')}" if agents else ""
+        lines = [f"{prefix}● {clean(shown.get('project') or '?')}{agent_count} · {session_status(shown, now)}"
                  + params(shown.get("state"), length=50), "---"]
         for s in sessions:
             blocked = s.get("state") == "needs_you"
             reply = (s.get("notification") or "Claude is waiting for you") if blocked else s.get("summary")
-            lines.append(f"{clean(s.get('project') or '?')} — {status(s, now)}" + params(s.get("state")))
+            lines.append(f"{clean(s.get('project') or '?')} — {session_status(s, now)}" + params(s.get("state")))
             if reply:
                 lines.append(f"--{clean(reply)}" + params(None, length=80))
+            for a in running_agents(s):
+                agent_status = status(a["state"], a.get("since", now), a.get("last_tool"), now)
+                lines.append(f"--{clean(a.get('type') or 'agent')} — {agent_status}" + params(a["state"]))
         count = plural(len(sessions), "session") + (f", {waiting} need{'s' if waiting == 1 else ''} you" if waiting else "")
         lines += ["---", f"{count}. {hidden_note}".strip()]
     lines += ["---", f'Open dashboard | bash="{HERE / "open-dash.sh"}" terminal=false', "Refresh | refresh=true"]

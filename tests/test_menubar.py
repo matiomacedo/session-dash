@@ -63,3 +63,27 @@ def test_user_text_cannot_inject_params_or_lines():
 def test_mcp_tool_shows_only_its_own_name():
     s = {"project": "web", "state": "working", "state_since": 1000, "last_tool": "mcp__claude_ai_Google_Drive__search_files"}
     assert title([s], 1000).startswith("● web · working 0s · search_files |")
+
+
+AGENT_SESSION = {"project": "web", "state": "working", "state_since": 820, "last_tool": "Agent", "agents": {
+    "b": {"type": "Plan", "since": 980, "last_tool": "Read"},
+    "a": {"type": "Explore|x", "since": 940},
+}}
+
+
+def test_title_counts_running_agents():
+    assert title([AGENT_SESSION], 1000).startswith("● web · 2 agents · working 3m · Agent |")
+
+
+def test_dropdown_lists_agents_under_their_session():
+    lines = menubar.render_menu([AGENT_SESSION], 1000).splitlines()
+    assert lines[2].startswith("web — working 3m · Agent |")
+    assert lines[3].startswith("--Explore│x — working 1m | color=#E8B04B")
+    assert lines[4].startswith("--Plan — working 20s · Read | color=#E8B04B")
+
+
+def test_dropdown_shows_blocked_agent_in_red():
+    s = {**AGENT_SESSION, "state": "needs_you", "blocked_on": ["c"],
+         "agents": {"a": {"type": "Explore", "since": 940, "last_tool": "Bash", "calls": ["c"]}}}
+    lines = menubar.render_menu([s], 1000).splitlines()
+    assert "--Explore — needs you 1m · Bash | color=#E5484D" in lines

@@ -110,6 +110,88 @@ def test_subagent_tool_use_keeps_needs_you(state_dir):
     assert state(state_dir)["last_tool"] == "Read"
 
 
+def test_subagent_lifecycle_is_tracked_under_the_session(state_dir):
+    send("UserPromptSubmit", 100)
+    send("PreToolUse", 101, tool_name="Agent", tool_use_id="t")
+    send("SubagentStart", 102, agent_id="sub-1", agent_type="Explore")
+    send("PreToolUse", 103, tool_name="Grep", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    s = state(state_dir)
+    assert s["agents"] == {"sub-1": {"type": "Explore", "since": 102, "last_tool": "Grep", "last_event_at": 103, "calls": ["s1"]}}
+    assert (s["state"], s["last_tool"]) == ("working", "Agent")  # the parent row is the main agent
+    send("PostToolUse", 104, tool_name="Grep", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    assert (state(state_dir)["agents"]["sub-1"]["last_event_at"], state(state_dir)["agents"]["sub-1"]["calls"]) == (104, [])
+    send("SubagentStop", 105, agent_id="sub-1", agent_type="Explore")
+    assert state(state_dir)["agents"] == {}
+
+
+def test_subagent_tool_use_leaves_idle_parent_idle(state_dir):
+    send("SubagentStart", 100, agent_id="bg", agent_type="general-purpose")
+    send("Stop", 101)  # a background agent outlives the turn
+    send("PreToolUse", 102, tool_name="Bash", tool_use_id="s1", agent_id="bg", agent_type="general-purpose")
+    send("PostToolUse", 103, tool_name="Bash", tool_use_id="s1", agent_id="bg", agent_type="general-purpose")
+    s = state(state_dir)
+    assert (s["state"], s["state_since"], s.get("last_tool")) == ("idle", 100, None)
+    assert s["agents"]["bg"]["last_tool"] == "Bash"
+
+
+def test_subagent_seen_first_on_tool_use_is_added(state_dir):
+    send("PreToolUse", 100, tool_name="Read", tool_use_id="s1", agent_id="sub-1", agent_type="Plan")
+    assert state(state_dir)["agents"] == {"sub-1": {"type": "Plan", "since": 100, "last_tool": "Read", "last_event_at": 100, "calls": ["s1"]}}
+
+
+def test_subagent_permission_prompt_clears_when_its_call_finishes(state_dir):
+    send("PreToolUse", 100, tool_name="Agent", tool_use_id="t")
+    send("PreToolUse", 101, tool_name="Bash", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    send("Notification", 102, message="Claude needs your permission to use Bash")
+    assert state(state_dir)["state"] == "needs_you"
+    send("PostToolUse", 110, tool_name="Bash", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    s = state(state_dir)
+    assert (s["state"], s["notification"], s["last_tool"]) == ("working", None, "Agent")
+
+
+def test_late_subagent_event_does_not_bring_back_a_stopped_agent(state_dir):
+    send("SubagentStart", 100, agent_id="sub-1", agent_type="Explore")
+    send("PreToolUse", 101, tool_name="Grep", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    send("SubagentStop", 102, agent_id="sub-1", agent_type="Explore")
+    send("PostToolUse", 103, tool_name="Grep", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    s = state(state_dir)
+    assert (s["state"], s.get("last_tool")) == ("idle", None)  # still not the main agent's call
+    send("Notification", 104, message="Claude needs your permission to use Bash", agent_id="sub-1")
+    assert state(state_dir)["agents"] == {}
+
+
+@pytest.mark.parametrize("event", ["Stop", "UserPromptSubmit"])
+def test_turn_boundaries_forget_agents_until_they_act_again(state_dir, event):
+    send("SubagentStart", 100, agent_id="sub-1", agent_type="Explore")  # e.g. interrupted with Esc
+    send(event, 101)
+    assert state(state_dir)["agents"] == {}
+    send("PreToolUse", 102, tool_name="Read", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    assert state(state_dir)["agents"]["sub-1"]["since"] == 102  # a background agent still running reappears
+
+
+def test_unnamed_prompt_does_not_wait_on_a_running_agent_call(state_dir):
+    send("PreToolUse", 100, tool_name="Agent", tool_use_id="t")
+    send("PreToolUse", 101, tool_name="mcp__drive__search", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    send("Notification", 102, message="Claude needs your permission to use Drive search")
+    assert state(state_dir)["blocked_on"] == ["s1"]
+    send("PostToolUse", 110, tool_name="mcp__drive__search", tool_use_id="s1", agent_id="sub-1", agent_type="Explore")
+    assert state(state_dir)["state"] == "working"
+
+
+def test_unnamed_prompt_with_only_an_agent_call_waits_on_it(state_dir):
+    send("PreToolUse", 100, tool_name="Agent", tool_use_id="t")
+    send("Notification", 101, message="Claude needs your permission to use the agent")
+    assert state(state_dir)["blocked_on"] == ["t"]
+
+
+def test_session_start_clears_agents_but_compact_keeps_them(state_dir):
+    send("SubagentStart", 100, agent_id="sub-1", agent_type="Explore")
+    send("SessionStart", 101, source="compact")
+    assert "sub-1" in state(state_dir)["agents"]
+    send("SessionStart", 102, source="resume")
+    assert state(state_dir)["agents"] == {}
+
+
 def test_stop_forgets_unfinished_calls(state_dir):
     send("PreToolUse", 100, tool_name="Bash", tool_use_id="denied")
     send("Stop", 110)
@@ -156,7 +238,7 @@ def test_session_start_refreshes_pid(state_dir, monkeypatch):
 
 def test_ps_lookup_skipped_for_ignored_events(state_dir, monkeypatch):
     monkeypatch.setattr(hook, "claude_process", lambda: pytest.fail("ps should not run"))
-    hook.apply_event({"session_id": SID, "cwd": "/x", "hook_event_name": "SubagentStop"}, now=1)
+    hook.apply_event({"session_id": SID, "cwd": "/x", "hook_event_name": "PreCompact"}, now=1)
     assert list(state_dir.iterdir()) == []
 
 

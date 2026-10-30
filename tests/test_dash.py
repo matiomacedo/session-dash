@@ -92,6 +92,51 @@ def test_render_rows():
     assert "3 sessions, 1 needs you. 2 sessions quiet for over 30m hidden. Press q to quit." in out
 
 
+AGENTS = {
+    "b": {"type": "Plan", "since": 980, "last_tool": "Read", "last_event_at": 995},
+    "a": {"type": "Explore", "since": 940, "last_tool": "Grep", "last_event_at": 999},
+}
+
+
+def test_split_stale_drops_quiet_agents_unless_a_call_is_in_flight():
+    s = {"last_event_at": 999, "agents": {**AGENTS, "old": {"type": "x", "since": 0, "last_event_at": 100},
+                                          "long-call": {"type": "y", "since": 1, "last_event_at": 100, "calls": ["c"]}}}
+    fresh, _ = dash.split_stale([s], 1000, 300)
+    assert [a["type"] for a in dash.running_agents(fresh[0])] == ["y", "Explore", "Plan"]
+
+
+def test_running_agents_marks_the_blocked_one():
+    s = {"state": "needs_you", "blocked_on": ["c2"], "agents": {
+        "a": {"type": "Explore", "since": 1, "calls": ["c1"]}, "b": {"type": "Plan", "since": 2, "calls": ["c2"]}}}
+    assert [a["state"] for a in dash.running_agents(s)] == ["working", "needs_you"]
+    assert [a["state"] for a in dash.running_agents({**s, "state": "working"})] == ["working", "working"]
+
+
+def test_sessions_with_running_agents_sort_as_working(tmp_path):
+    write(tmp_path / "idle.json", {"state": "idle", "last_event_at": 900})
+    write(tmp_path / "bg.json", {"state": "idle", "last_event_at": 800, "agents": {"a": {"type": "x"}}})
+    write(tmp_path / "work.json", {"state": "working", "last_event_at": 850})
+    loaded = dash.load_sessions(tmp_path, 1000)
+    assert [s["last_event_at"] for s in loaded] == [850, 800, 900]
+
+
+def test_render_agent_rows_under_their_session():
+    lines = render_text([
+        {"project": "web-client", "state": "working", "state_since": 820, "last_tool": "Agent", "agents": AGENTS},
+        {"project": "infra", "state": "idle", "state_since": 280},
+    ]).splitlines()
+    assert lines[2].split()[:2] == ["└", "Explore"] and lines[2].split()[2] in dash.SPINNER
+    assert lines[2].split()[3:] == ["working", "1m", "Grep"]
+    assert lines[3].split()[:2] == ["└", "Plan"] and lines[3].split()[3:] == ["working", "20s", "Read"]
+    assert lines[4].split()[0] == "infra"
+
+
+def test_render_blocked_agent_in_red():
+    out = render_text([{"project": "web", "state": "needs_you", "state_since": 990, "blocked_on": ["c"],
+                        "agents": {"a": {"type": "Explore", "since": 940, "last_tool": "Bash", "calls": ["c"]}}}])
+    assert out.splitlines()[2].split() == ["└", "Explore", "needs", "you", "1m", "Bash"]
+
+
 def test_bad_stale_minutes_env_is_a_usage_error():
     r = subprocess.run([sys.executable, DASH], capture_output=True, text=True,
                        env={**os.environ, "CLAUDE_DASH_STALE_MIN": "30m"})
